@@ -1,0 +1,22 @@
+name = "gas"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+
+# Runs the content pass + earnings poll + report build automatically.
+# Default: every 6 hours (00:00, 06:00, 12:00, 18:00 UTC). Adjust to taste —
+# more often costs more Anthropic tokens for not much extra insight.
+[triggers]
+crons = ["0 */6 * * *"]
+
+# Secrets (set with `wrangler secret put NAME`, never committed):
+#   SUPABASE_URL
+#   SUPABASE_SERVICE_ROLE_KEY   (service role, not anon — this worker writes tables directly)
+#   ANTHROPIC_API_KEY
+#   WORKER_SHARED_SECRET        (LITE sends this as a Bearer token on every request)
+#   PARTNERSTACK_API_KEY
+#   EXNESS_EMAIL
+#   EXNESS_PASSWORD
+#
+# Plain vars (safe to keep here):
+[vars]
+ANTHROPIC_MODEL = "claude-sonnet-5"
