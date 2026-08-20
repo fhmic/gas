@@ -1,4 +1,4 @@
-# GAS — Growth Agent Service
+# Growth Agent Service(GAS)
 
 The fuel behind the Affiliate Marketing Social Media Growth Agent: the piece
 that keeps working when your laptop is off. LITE stays the brains for live
