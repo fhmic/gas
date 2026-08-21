@@ -1,7 +1,7 @@
 // gas/src/agent.ts
 import type { Env, GrowthJob, ContentDraft } from "./types";
 import { SYSTEM_PROMPT } from "./systemPrompt";
-import { generateWithSummary } from "./anthropic";
+import { generateWithSummary } from "./llm";
 import { insertDrafts, logRun } from "./db";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
