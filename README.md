@@ -1,4 +1,4 @@
-# Growth Agent Service(GAS)
+# Growth Agent Service (GAS)
 
 The fuel behind the Affiliate Marketing Social Media Growth Agent: the piece
 that keeps working when your laptop is off. LITE stays the brains for live
@@ -54,13 +54,27 @@ row after the first cron tick and tighten the `pick(...)` field-name lists
 in `exness.ts` if `clicks/leads/conversions/earnings` come back null despite
 `ok: true`.
 
-## 4. Anthropic
+## 4. LLM provider (multi-provider, Gemini-first)
 
-Use the same Anthropic API key LITE already has in
-`config/api_keys.json -> anthropic_api_key`. Set `ANTHROPIC_MODEL` in
-`wrangler.toml` `[vars]` to whatever's current per
-https://docs.claude.com — `claude-sonnet-5` is a reasonable default as of
-this build.
+GAS now uses the same "try each configured provider in order, fall through
+on failure" pattern EVA uses — not locked to Claude. **Only one key is
+required to start**, the rest are optional and just get skipped if unset:
+
+1. **Gemini** (recommended to start) — free tier, no card:
+   `aistudio.google.com` → Get API key → `wrangler secret put GOOGLE_GEMINI_API_KEY`
+2. **Claude** — add this once sales are covering it; from that point on it
+   participates in the chain automatically, no code or redeploy needed,
+   just: `wrangler secret put ANTHROPIC_API_KEY`
+3. **Groq** — free tier, no card: `console.groq.com` →
+   `wrangler secret put GROQ_API_KEY`
+4. Optional further fallbacks, same free-tier pattern: `OPENROUTER_API_KEY`,
+   `NVIDIA_API_KEY`, `HUGGINGFACE_API_KEY`
+
+Order tried: **Gemini → Claude → Groq → OpenRouter → NVIDIA → HuggingFace**,
+first configured *and* successful one wins. If every configured provider
+fails on a given call, the error message lists every individual failure
+reason — same diagnosability as EVA's chain, so a bad key or a stale model
+name is obvious immediately rather than a generic "it broke".
 
 ## 5. Deploy
 
