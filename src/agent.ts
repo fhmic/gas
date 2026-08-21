@@ -1,107 +1,30 @@
-// gas/src/agent.ts
-import type { Env, GrowthJob, ContentDraft } from "./types";
-import { SYSTEM_PROMPT } from "./systemPrompt";
-import { generateWithSummary } from "./llm";
-import { insertDrafts, logRun } from "./db";
-import type { SupabaseClient } from "@supabase/supabase-js";
+name = "gas"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
 
-function buildTask(job: GrowthJob): string {
-  return [
-    `Generate ${job.posts_per_run} pieces of content for the '${job.niche}' `,
-    `affiliate niche. Goal: ${job.goal}. `,
-    `Target platforms: ${job.platforms.join(", ")}. `,
-    "",
-    "For EACH piece, output a clearly delimited block in exactly this form ",
-    "(so it can be parsed programmatically) — repeat the block once per piece:",
-    "",
-    "---PIECE---",
-    "platform: <one of the target platforms>",
-    "content_type: <post_ideas | video_script | email_sequence | ad_copy | landing_page>",
-    "title: <short internal title>",
-    "tracking_subid: <short lowercase-hyphenated tag>",
-    "body: |",
-    "  <the actual content, multi-line ok>",
-    "---END---",
-    "",
-    "After all pieces, still include the mandatory LITE EXECUTIVE SUMMARY block.",
-  ].join("\n");
-}
+# Runs the content pass + earnings poll + report build automatically.
+# Default: every 6 hours (00:00, 06:00, 12:00, 18:00 UTC). Adjust to taste —
+# more often costs more Anthropic tokens for not much extra insight.
+[triggers]
+crons = ["0 */6 * * *"]
 
-function parseDrafts(text: string): ContentDraft[] {
-  const drafts: ContentDraft[] = [];
-  const pieceRe = /---PIECE---([\s\S]*?)---END---/g;
-  let m: RegExpExecArray | null;
-  while ((m = pieceRe.exec(text)) !== null) {
-    const block = m[1];
-    const get = (key: string): string => {
-      const re = new RegExp(`${key}\\s*:\\s*\\|?\\s*([\\s\\S]*?)(?=\\n\\w+\\s*:|$)`, "i");
-      const mm = re.exec(block);
-      return mm ? mm[1].trim() : "";
-    };
-    const platform = get("platform");
-    const body = get("body");
-    if (!platform || !body) continue; // skip malformed pieces rather than insert junk
-    drafts.push({
-      platform,
-      content_type: get("content_type") || "post_ideas",
-      title: get("title") || `${platform} draft`,
-      tracking_subid: get("tracking_subid") || undefined,
-      body,
-    });
-  }
-  return drafts;
-}
-
-/** Runs one content-generation pass for a single job. Never throws —
- * failures are logged to run_log and surfaced in the return value instead,
- * so one bad job doesn't stop the cron cycle from processing the rest. */
-export async function runContentPass(
-  db: SupabaseClient,
-  env: Env,
-  job: GrowthJob
-): Promise<{ ok: boolean; draftsCreated: number; error?: string }> {
-  try {
-    const task = buildTask(job);
-    // Scaled to the number of pieces requested: ~1200 tokens/piece is
-    // generous for a post/ad/script, plus headroom for the mandatory
-    // summary block. The flat 2000-token default was fine for 1-2 pieces
-    // but silently truncated longer runs (posts_per_run > 2, or any
-    // video_script/email_sequence piece, which run longer than a post) —
-    // a cut-off piece loses its closing ---END--- marker and gets silently
-    // dropped by parseDrafts rather than erroring, so this was invisible
-    // until someone actually counted drafts vs. posts_per_run and found
-    // fewer than expected.
-    const maxTokens = Math.min(1200 * job.posts_per_run + 500, 8000);
-    const { text, summary } = await generateWithSummary(env, SYSTEM_PROMPT, task, maxTokens);
-    const drafts = parseDrafts(text);
-    const created = await insertDrafts(db, job.id, drafts);
-
-    // Surfaces truncation/malformed-output cases instead of silently
-    // under-delivering: parseDrafts drops any piece missing a clean
-    // ---END--- marker, which happens if the response got cut off before
-    // the token budget fix above, or the model just didn't follow the
-    // format. ok stays true (a partial batch isn't a failure), but the
-    // shortfall is visible in run_log rather than only discoverable by
-    // manually counting drafts against posts_per_run.
-    const shortfall = job.posts_per_run - created;
-    const note =
-      shortfall > 0
-        ? `Requested ${job.posts_per_run} piece(s), only ${created} parsed cleanly — check for truncation or format drift.`
-        : undefined;
-
-    await logRun(db, {
-      jobId: job.id,
-      action: "content_pass",
-      ok: true,
-      draftsCreated: created,
-      summary,
-      error: note ?? null,
-    });
-
-    return { ok: true, draftsCreated: created };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await logRun(db, { jobId: job.id, action: "content_pass", ok: false, error: message });
-    return { ok: false, draftsCreated: 0, error: message };
-  }
-}
+# Secrets (set with `wrangler secret put NAME`, never committed):
+#   SUPABASE_URL
+#   SUPABASE_SERVICE_ROLE_KEY   (service role, not anon — this worker writes tables directly)
+#   WORKER_SHARED_SECRET        (LITE/EVA send this as a Bearer token on every request)
+#   PARTNERSTACK_API_KEY
+#   EXNESS_EMAIL
+#   EXNESS_PASSWORD
+#
+#   LLM provider chain — only one is required, rest optional (tried in this
+#   order, first configured + successful wins; see README for details):
+#   GOOGLE_GEMINI_API_KEY       (recommended to start — free tier, no card)
+#   ANTHROPIC_API_KEY           (add later once revenue covers it)
+#   GROQ_API_KEY                (free tier, no card)
+#   OPENROUTER_API_KEY
+#   NVIDIA_API_KEY
+#   HUGGINGFACE_API_KEY
+#
+# Plain vars (safe to keep here):
+[vars]
+GOOGLE_GEMINI_MODEL = "gemini-3.6-flash"
