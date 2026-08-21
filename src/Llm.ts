@@ -285,13 +285,16 @@ export function parseLiteSummary(text: string): LiteExecutiveSummary {
 }
 
 /** Ensures the mandatory summary block is present, retrying once (against
- * the same provider chain) if not. */
+ * the same provider chain) if not. `maxTokens` controls the main generation
+ * pass only — the summary-only retry always uses a small fixed budget,
+ * since it's asking for a few short labelled fields, not fresh content. */
 export async function generateWithSummary(
   env: Env,
   systemPrompt: string,
   userPrompt: string,
+  maxTokens = 2000,
 ): Promise<{ text: string; summary: LiteExecutiveSummary }> {
-  let text = await callProvider(env, systemPrompt, userPrompt);
+  let text = await callProvider(env, systemPrompt, userPrompt, maxTokens);
 
   if (!/LITE EXECUTIVE SUMMARY/i.test(text)) {
     const followUp =
