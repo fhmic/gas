@@ -62,9 +62,32 @@ export async function runContentPass(
 ): Promise<{ ok: boolean; draftsCreated: number; error?: string }> {
   try {
     const task = buildTask(job);
-    const { text, summary } = await generateWithSummary(env, SYSTEM_PROMPT, task);
+    // Scaled to the number of pieces requested: ~1200 tokens/piece is
+    // generous for a post/ad/script, plus headroom for the mandatory
+    // summary block. The flat 2000-token default was fine for 1-2 pieces
+    // but silently truncated longer runs (posts_per_run > 2, or any
+    // video_script/email_sequence piece, which run longer than a post) —
+    // a cut-off piece loses its closing ---END--- marker and gets silently
+    // dropped by parseDrafts rather than erroring, so this was invisible
+    // until someone actually counted drafts vs. posts_per_run and found
+    // fewer than expected.
+    const maxTokens = Math.min(1200 * job.posts_per_run + 500, 8000);
+    const { text, summary } = await generateWithSummary(env, SYSTEM_PROMPT, task, maxTokens);
     const drafts = parseDrafts(text);
     const created = await insertDrafts(db, job.id, drafts);
+
+    // Surfaces truncation/malformed-output cases instead of silently
+    // under-delivering: parseDrafts drops any piece missing a clean
+    // ---END--- marker, which happens if the response got cut off before
+    // the token budget fix above, or the model just didn't follow the
+    // format. ok stays true (a partial batch isn't a failure), but the
+    // shortfall is visible in run_log rather than only discoverable by
+    // manually counting drafts against posts_per_run.
+    const shortfall = job.posts_per_run - created;
+    const note =
+      shortfall > 0
+        ? `Requested ${job.posts_per_run} piece(s), only ${created} parsed cleanly — check for truncation or format drift.`
+        : undefined;
 
     await logRun(db, {
       jobId: job.id,
@@ -72,6 +95,7 @@ export async function runContentPass(
       ok: true,
       draftsCreated: created,
       summary,
+      error: note ?? null,
     });
 
     return { ok: true, draftsCreated: created };
