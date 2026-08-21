@@ -11,12 +11,20 @@ crons = ["0 */6 * * *"]
 # Secrets (set with `wrangler secret put NAME`, never committed):
 #   SUPABASE_URL
 #   SUPABASE_SERVICE_ROLE_KEY   (service role, not anon — this worker writes tables directly)
-#   ANTHROPIC_API_KEY
-#   WORKER_SHARED_SECRET        (LITE sends this as a Bearer token on every request)
+#   WORKER_SHARED_SECRET        (LITE/EVA send this as a Bearer token on every request)
 #   PARTNERSTACK_API_KEY
 #   EXNESS_EMAIL
 #   EXNESS_PASSWORD
 #
+#   LLM provider chain — only one is required, rest optional (tried in this
+#   order, first configured + successful wins; see README for details):
+#   GOOGLE_GEMINI_API_KEY       (recommended to start — free tier, no card)
+#   ANTHROPIC_API_KEY           (add later once revenue covers it)
+#   GROQ_API_KEY                (free tier, no card)
+#   OPENROUTER_API_KEY
+#   NVIDIA_API_KEY
+#   HUGGINGFACE_API_KEY
+#
 # Plain vars (safe to keep here):
 [vars]
-ANTHROPIC_MODEL = "claude-sonnet-5"
+GOOGLE_GEMINI_MODEL = "gemini-3.6-flash"
