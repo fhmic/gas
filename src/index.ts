@@ -13,9 +13,30 @@ function unauthorized(): Response {
   });
 }
 
-function checkAuth(req: Request, env: Env): boolean {
-  const auth = req.headers.get("authorization") ?? "";
-  return auth === `Bearer ${env.WORKER_SHARED_SECRET}`;
+// A missing WORKER_SHARED_SECRET is a deploy/config mistake, not a bad
+// caller — surfacing it as a distinct 500 (instead of the same 401 a wrong
+// key produces) means "the secret was never set" and "the caller sent the
+// wrong key" no longer look identical from the client side.
+function misconfigured(): Response {
+  return new Response(
+    JSON.stringify({
+      error: "server misconfigured",
+      detail: "WORKER_SHARED_SECRET is not set on this Worker — run `wrangler secret put WORKER_SHARED_SECRET`.",
+    }),
+    { status: 500, headers: { "content-type": "application/json" } },
+  );
+}
+
+type AuthResult = "ok" | "unauthorized" | "misconfigured";
+
+function checkAuth(req: Request, env: Env): AuthResult {
+  const expected = (env.WORKER_SHARED_SECRET ?? "").trim();
+  if (!expected) return "misconfigured";
+  // .trim() on the incoming header absorbs the classic copy-paste artifact
+  // (trailing newline/whitespace picked up when selecting a full line) that
+  // would otherwise fail this exact-match check for a "correct" key.
+  const auth = (req.headers.get("authorization") ?? "").trim();
+  return auth === `Bearer ${expected}` ? "ok" : "unauthorized";
 }
 
 function json(data: unknown, status = 200): Response {
@@ -92,7 +113,9 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
 
-    if (!checkAuth(req, env)) return unauthorized();
+    const authResult = checkAuth(req, env);
+    if (authResult === "misconfigured") return misconfigured();
+    if (authResult === "unauthorized") return unauthorized();
 
     const db = getDb(env);
 
