@@ -117,6 +117,12 @@ export default {
     if (authResult === "misconfigured") return misconfigured();
     if (authResult === "unauthorized") return unauthorized();
 
+    // Everything past this point (Supabase access, route handlers) is wrapped
+    // so a missing/bad env var (e.g. SUPABASE_URL never set) produces a clear,
+    // diagnosable JSON error instead of Cloudflare's bare generic 500 — which
+    // was previously indistinguishable from the auth-misconfiguration case on
+    // the client side and caused real confusion troubleshooting the wrong thing.
+    try {
     const db = getDb(env);
 
     // POST /jobs — create a job
@@ -200,6 +206,9 @@ export default {
     }
 
     return json({ error: "not found" }, 404);
+    } catch (e: any) {
+      return json({ error: "internal error", detail: String(e?.message ?? e) }, 500);
+    }
   },
 
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
