@@ -205,6 +205,135 @@ export default {
       return json({ ran: true, ...result });
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // RICS CRM routes — same auth, same db, same error-handling as
+    // everything above. Query params double as simple filters throughout.
+    // ═══════════════════════════════════════════════════════════════════
+
+    // POST /crm/companies — create or update (pass id to update)
+    if (url.pathname === "/crm/companies" && req.method === "POST") {
+      const body = (await req.json()) as Record<string, unknown>;
+      const { id, ...fields } = body;
+      const row = { ...fields, updated_at: new Date().toISOString() };
+      const q = id
+        ? db.from("crm_companies").update(row).eq("id", id)
+        : db.from("crm_companies").insert(row);
+      const { data, error } = await q.select().single();
+      if (error) return json({ error: error.message }, 400);
+      return json({ company: data });
+    }
+
+    // GET /crm/companies?q=<name search>&id=<exact>
+    if (url.pathname === "/crm/companies" && req.method === "GET") {
+      const id = url.searchParams.get("id");
+      const q = url.searchParams.get("q");
+      let query = db.from("crm_companies").select("*");
+      if (id) query = query.eq("id", id);
+      if (q) query = query.ilike("name", `%${q}%`);
+      const { data, error } = await query.order("created_at", { ascending: false }).limit(50);
+      if (error) return json({ error: error.message }, 400);
+      return json({ companies: data });
+    }
+
+    // POST /crm/contacts — create or update (pass id to update)
+    if (url.pathname === "/crm/contacts" && req.method === "POST") {
+      const body = (await req.json()) as Record<string, unknown>;
+      const { id, ...fields } = body;
+      const row = { ...fields, updated_at: new Date().toISOString() };
+      const q = id
+        ? db.from("crm_contacts").update(row).eq("id", id)
+        : db.from("crm_contacts").insert(row);
+      const { data, error } = await q.select().single();
+      if (error) return json({ error: error.message }, 400);
+      return json({ contact: data });
+    }
+
+    // GET /crm/contacts?q=<name search>&company_id=<filter>&id=<exact>
+    if (url.pathname === "/crm/contacts" && req.method === "GET") {
+      const id = url.searchParams.get("id");
+      const companyId = url.searchParams.get("company_id");
+      const q = url.searchParams.get("q");
+      let query = db.from("crm_contacts").select("*");
+      if (id) query = query.eq("id", id);
+      if (companyId) query = query.eq("company_id", companyId);
+      if (q) query = query.ilike("name", `%${q}%`);
+      const { data, error } = await query.order("created_at", { ascending: false }).limit(50);
+      if (error) return json({ error: error.message }, 400);
+      return json({ contacts: data });
+    }
+
+    // POST /crm/deals — create or update (pass id to update)
+    if (url.pathname === "/crm/deals" && req.method === "POST") {
+      const body = (await req.json()) as Record<string, unknown>;
+      const { id, ...fields } = body;
+      const row = { ...fields, updated_at: new Date().toISOString() };
+      const q = id
+        ? db.from("crm_deals").update(row).eq("id", id)
+        : db.from("crm_deals").insert(row);
+      const { data, error } = await q.select().single();
+      if (error) return json({ error: error.message }, 400);
+      return json({ deal: data });
+    }
+
+    // GET /crm/deals?stage=<filter>&id=<exact>
+    if (url.pathname === "/crm/deals" && req.method === "GET") {
+      const id = url.searchParams.get("id");
+      const stage = url.searchParams.get("stage");
+      let query = db.from("crm_deals").select("*");
+      if (id) query = query.eq("id", id);
+      if (stage) query = query.eq("stage", stage);
+      const { data, error } = await query.order("updated_at", { ascending: false }).limit(50);
+      if (error) return json({ error: error.message }, 400);
+      return json({ deals: data });
+    }
+
+    // POST /crm/interactions — log a touchpoint (no update path — interactions
+    // are an append-only log, matching earnings_snapshots' pattern above)
+    if (url.pathname === "/crm/interactions" && req.method === "POST") {
+      const body = (await req.json()) as Record<string, unknown>;
+      const { data, error } = await db.from("crm_interactions").insert(body).select().single();
+      if (error) return json({ error: error.message }, 400);
+      return json({ interaction: data });
+    }
+
+    // GET /crm/interactions?contact_id=<filter>&company_id=<filter>&deal_id=<filter>
+    if (url.pathname === "/crm/interactions" && req.method === "GET") {
+      const contactId = url.searchParams.get("contact_id");
+      const companyId = url.searchParams.get("company_id");
+      const dealId = url.searchParams.get("deal_id");
+      let query = db.from("crm_interactions").select("*");
+      if (contactId) query = query.eq("contact_id", contactId);
+      if (companyId) query = query.eq("company_id", companyId);
+      if (dealId) query = query.eq("deal_id", dealId);
+      const { data, error } = await query.order("occurred_at", { ascending: false }).limit(100);
+      if (error) return json({ error: error.message }, 400);
+      return json({ interactions: data });
+    }
+
+    // POST /crm/tasks — create a follow-up (pass id + done to mark complete)
+    if (url.pathname === "/crm/tasks" && req.method === "POST") {
+      const body = (await req.json()) as Record<string, unknown>;
+      const { id, ...fields } = body;
+      const q = id
+        ? db.from("crm_tasks").update(fields).eq("id", id)
+        : db.from("crm_tasks").insert(fields);
+      const { data, error } = await q.select().single();
+      if (error) return json({ error: error.message }, 400);
+      return json({ task: data });
+    }
+
+    // GET /crm/tasks?done=false&due_before=<ISO date>
+    if (url.pathname === "/crm/tasks" && req.method === "GET") {
+      const done = url.searchParams.get("done");
+      const dueBefore = url.searchParams.get("due_before");
+      let query = db.from("crm_tasks").select("*");
+      if (done !== null) query = query.eq("done", done === "true");
+      if (dueBefore) query = query.lte("due_at", dueBefore);
+      const { data, error } = await query.order("due_at", { ascending: true }).limit(50);
+      if (error) return json({ error: error.message }, 400);
+      return json({ tasks: data });
+    }
+
     return json({ error: "not found" }, 404);
     } catch (e: any) {
       return json({ error: "internal error", detail: String(e?.message ?? e) }, 500);
