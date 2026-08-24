@@ -334,6 +334,77 @@ export default {
       return json({ tasks: data });
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // Data Analytics routes — fixed, parameterized aggregates only. No open
+    // SQL surface: every query below is a hardcoded shape (date-range/stage
+    // filters only), computed from raw rows fetched via the query builder,
+    // never from a string the caller controls. Small-data-volume assumption
+    // (personal/small-business scale) — aggregation happens here in the
+    // Worker rather than via a Postgres view/RPC, keeping this consistent
+    // with everything else in this file.
+    // ═══════════════════════════════════════════════════════════════════
+
+    // GET /analytics/pipeline-summary — deal counts + total value by stage
+    if (url.pathname === "/analytics/pipeline-summary" && req.method === "GET") {
+      const { data, error } = await db.from("crm_deals").select("stage, value, currency");
+      if (error) return json({ error: error.message }, 400);
+      const byStage: Record<string, { count: number; total_value: number }> = {};
+      for (const d of data ?? []) {
+        const s = d.stage as string;
+        byStage[s] ??= { count: 0, total_value: 0 };
+        byStage[s].count += 1;
+        byStage[s].total_value += Number(d.value) || 0;
+      }
+      return json({ pipeline: byStage, total_deals: (data ?? []).length });
+    }
+
+    // GET /analytics/earnings-trend?days=30 — earnings by network over a window
+    if (url.pathname === "/analytics/earnings-trend" && req.method === "GET") {
+      const days = Number(url.searchParams.get("days") ?? "30");
+      const since = new Date(Date.now() - days * 86400000).toISOString();
+      const { data, error } = await db
+        .from("earnings_snapshots")
+        .select("network, earnings, currency, pulled_at")
+        .gte("pulled_at", since)
+        .eq("ok", true);
+      if (error) return json({ error: error.message }, 400);
+      const byNetwork: Record<string, number> = {};
+      for (const row of data ?? []) {
+        byNetwork[row.network as string] = (byNetwork[row.network as string] ?? 0) + (Number(row.earnings) || 0);
+      }
+      return json({ days, earnings_by_network: byNetwork, snapshot_count: (data ?? []).length });
+    }
+
+    // GET /analytics/interaction-volume?days=30 — CRM touchpoint counts by type
+    if (url.pathname === "/analytics/interaction-volume" && req.method === "GET") {
+      const days = Number(url.searchParams.get("days") ?? "30");
+      const since = new Date(Date.now() - days * 86400000).toISOString();
+      const { data, error } = await db
+        .from("crm_interactions")
+        .select("type, occurred_at")
+        .gte("occurred_at", since);
+      if (error) return json({ error: error.message }, 400);
+      const byType: Record<string, number> = {};
+      for (const row of data ?? []) {
+        byType[row.type as string] = (byType[row.type as string] ?? 0) + 1;
+      }
+      return json({ days, interactions_by_type: byType, total: (data ?? []).length });
+    }
+
+    // GET /analytics/tasks-overview — open / overdue / done counts
+    if (url.pathname === "/analytics/tasks-overview" && req.method === "GET") {
+      const { data, error } = await db.from("crm_tasks").select("done, due_at");
+      if (error) return json({ error: error.message }, 400);
+      const now = new Date();
+      let open = 0, overdue = 0, done = 0;
+      for (const t of data ?? []) {
+        if (t.done) { done++; continue; }
+        open++;
+        if (t.due_at && new Date(t.due_at as string) < now) overdue++;
+      }
+      return json({ open, overdue, done, total: (data ?? []).length });
+    }
+
     return json({ error: "not found" }, 404);
     } catch (e: any) {
       return json({ error: "internal error", detail: String(e?.message ?? e) }, 500);
