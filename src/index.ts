@@ -1,7 +1,8 @@
 // gas/src/index.ts
 import type { Env } from "./types";
-import { getDb, getActiveJobs, insertSnapshot, logRun } from "./db";
+import { getDb, getActiveJobs, insertSnapshot, logRun, getPendingVideoRenders, updateDraftVideo } from "./db";
 import { runContentPass } from "./agent";
+import { checkVideoRender } from "./video";
 import { pollPartnerStack } from "./networks/partnerstack";
 import { pollExness } from "./networks/exness";
 import { buildReport } from "./report";
@@ -46,9 +47,29 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
+/** Polls every draft still waiting on a Runway render. Runs once per cycle,
+ * same cadence as the content pass — a Runway render started on one cron
+ * tick typically finishes well before the next one, so this is usually
+ * enough without a dedicated faster schedule. On a FAILED Runway task this
+ * degrades the draft to the Workers-AI fallback automatically (see
+ * video/index.ts::checkVideoRender) rather than leaving it stuck. */
+async function checkPendingVideoRenders(env: Env): Promise<{ checked: number; resolved: number }> {
+  const db = getDb(env);
+  const pending = await getPendingVideoRenders(db);
+  let resolved = 0;
+  for (const draft of pending) {
+    const result = await checkVideoRender(env, draft.video_task_id, draft.body, draft.niche, draft.id);
+    if (result) {
+      await updateDraftVideo(db, draft.id, result);
+      resolved++;
+    }
+  }
+  return { checked: pending.length, resolved };
+}
+
 /** Full poll-and-generate cycle. Called by the cron trigger, and reachable
  * manually via POST /run-now so you can test or force a fresh pull. */
-async function runCycle(env: Env): Promise<{ jobsRun: number; reportId: string | null }> {
+async function runCycle(env: Env): Promise<{ jobsRun: number; reportId: string | null; videoRenders: { checked: number; resolved: number } }> {
   const db = getDb(env);
   const cycleStart = new Date().toISOString();
 
@@ -57,6 +78,9 @@ async function runCycle(env: Env): Promise<{ jobsRun: number; reportId: string |
   for (const job of jobs) {
     await runContentPass(db, env, job);
   }
+
+  // 1b. Check on any video renders still in flight from a previous pass.
+  const videoRenders = await checkPendingVideoRenders(env);
 
   // 2. Poll every network once per cycle (shared across jobs — earnings
   //    aren't per-job, they're per affiliate account).
@@ -106,7 +130,7 @@ async function runCycle(env: Env): Promise<{ jobsRun: number; reportId: string |
 
   await logRun(db, { action: "report_build", ok: !insertErr, error: insertErr?.message ?? null });
 
-  return { jobsRun: jobs.length, reportId: inserted?.id ?? null };
+  return { jobsRun: jobs.length, reportId: inserted?.id ?? null, videoRenders };
 }
 
 export default {
@@ -228,6 +252,13 @@ export default {
     // POST /run-now — manually trigger a full cycle (testing / forced refresh)
     if (url.pathname === "/run-now" && req.method === "POST") {
       const result = await runCycle(env);
+      return json({ ran: true, ...result });
+    }
+
+    // POST /render-check — manually poll in-flight Runway video renders,
+    // without waiting for the next cron tick or running a full content pass.
+    if (url.pathname === "/render-check" && req.method === "POST") {
+      const result = await checkPendingVideoRenders(env);
       return json({ ran: true, ...result });
     }
 

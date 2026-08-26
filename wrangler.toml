@@ -8,6 +8,22 @@ compatibility_date = "2026-08-01"
 [triggers]
 crons = ["0 */6 * * *"]
 
+# Cloudflare Workers AI — first-party binding, no extra signup or API key.
+# Powers the zero-external-API video fallback (video/fallback.ts): AI-
+# generated scene images + narration audio when Runway is unset or fails.
+[ai]
+binding = "AI"
+
+# R2 bucket for rendered/fallback video assets. Create it once with:
+#   npx wrangler r2 bucket create gas-media
+# Then either enable "Public access" on the bucket (gives you a
+# pub-xxxx.r2.dev URL) or attach a custom domain — either way, put that URL
+# in MEDIA_PUBLIC_BASE_URL below (or as a secret) so fallback assets get
+# real, shareable links instead of raw R2 keys.
+[[r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "gas-media"
+
 # Secrets (set with `wrangler secret put NAME`, never committed):
 #   SUPABASE_URL
 #   SUPABASE_SERVICE_ROLE_KEY   (service role, not anon — this worker writes tables directly)
@@ -25,6 +41,14 @@ crons = ["0 */6 * * *"]
 #   NVIDIA_API_KEY
 #   HUGGINGFACE_API_KEY
 #
+#   Video rendering — optional. Unset = every video draft uses the free
+#   Workers AI fallback automatically, no extra setup required at all.
+#   RUNWAY_API_KEY              (buy credits at dev.runwayml.com — ~$0.01/credit,
+#                                gen4_turbo text-to-video is metered per second)
+#
 # Plain vars (safe to keep here):
 [vars]
 GOOGLE_GEMINI_MODEL = "gemini-3.6-flash"
+RUNWAY_MODEL = "gen4_turbo"
+RUNWAY_API_VERSION = "2024-11-06"
+# MEDIA_PUBLIC_BASE_URL = "https://media.yourdomain.com"   # uncomment once your R2 bucket has a public URL

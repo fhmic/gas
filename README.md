@@ -91,8 +91,20 @@ npx wrangler secret put PARTNERSTACK_API_KEY
 npx wrangler secret put EXNESS_EMAIL
 npx wrangler secret put EXNESS_PASSWORD
 
+# Optional — real video rendering. Skip this entirely and video pieces
+# still get made, just via the free Workers AI fallback instead of Runway.
+npx wrangler secret put RUNWAY_API_KEY
+
+# Create the R2 bucket the video pipeline (both Runway and the fallback)
+# stores finished assets in — one-time setup:
+npx wrangler r2 bucket create gas-media
+
 npx wrangler deploy
 ```
+
+Run `migrations/002_video.sql` in the Supabase SQL editor once, after
+`schema.sql` — it adds the video columns to `content_queue` (safe to run on
+an existing table; every column is `add column if not exists`).
 
 Wrangler prints your Worker URL, e.g. `https://gas.<you>.workers.dev`.
 
@@ -115,11 +127,40 @@ into `main.py` (import line, `FUNCTION_DECLARATIONS` entry, dispatch
 
 Talk to LITE:
 
-> "Assign the growth agent to work the forex trading apps niche on TikTok
-> and Instagram, checking in every 6 hours."
+> "Assign the growth agent to work the forex trading apps niche on TikTok,
+> Instagram, and LinkedIn, checking in every 6 hours."
 
 Shut your laptop down. It keeps drafting content and polling both networks
-on Cloudflare's clock, not yours.
+on Cloudflare's clock, not yours. LinkedIn needs no separate setup — it's
+just another entry in `platforms`; the system prompt already knows to write
+LinkedIn pieces in a professional register with a soft CTA instead of
+TikTok voice with a hard sell.
+
+### Real video, not just scripts
+
+When the LLM picks `content_type: video` for a piece (it does this on its
+own for TikTok/Reels/Shorts/LinkedIn-video pieces — see the system prompt),
+GAS renders an actual video asset instead of leaving it as text:
+
+- **If `RUNWAY_API_KEY` is set**: submits the script to Runway's
+  text-to-video API. The draft lands in the queue with
+  `video_status: "queued"`; the next cron tick (or a manual
+  `POST /render-check`) polls it to `"ready"` with a real `video_url`, or
+  degrades it to the fallback below if Runway's render itself failed.
+- **If it isn't** (or Runway's submit call fails): renders a free fallback
+  instead, using Cloudflare Workers AI — already bound to this Worker, no
+  extra signup or key. You get `video_status: "fallback_ready"` and a
+  `video_assets` object: one AI-generated image per scene plus one
+  AI-generated narration audio track, both in your own R2 bucket. Quality
+  is lower than a true generated clip, and it isn't a finished MP4 —
+  dropping those into CapCut/InShot/Canva is a sub-one-minute assembly step
+  from there. **No API call, no extra account, no extra key required** —
+  it runs on the Cloudflare account this Worker is already deployed to.
+
+Either way, nothing about the approval flow changes — video drafts sit in
+`pending_approval` in `content_queue` exactly like text ones, and
+`list_queue` / `get_report` in LITE now surface the video status and URL
+alongside the usual title/platform line.
 
 Next time you're back:
 
@@ -151,3 +192,19 @@ handy for testing right after deploy.
   cents at 6h cadence). Both network polls are free API calls. This is the
   one part of the system that costs real money continuously, so `cadence_hours`
   is deliberately per-job and easy to turn down.
+- **Runway video costs real money per render** — a 5s Gen-4 Turbo clip is
+  roughly $0.05-0.10 depending on current pricing/resolution; check
+  dev.runwayml.com's pricing page before turning on high-volume video jobs.
+  There's no per-job spending cap built in yet — if you want one, the clean
+  place to add it is a running-total check against `earnings_snapshots`
+  before `submitVideoTask` is called in `video/index.ts`.
+- **The Workers AI fallback produces assets, not a finished video file** —
+  a stateless Cloudflare Worker has no ffmpeg and a hard CPU-time ceiling
+  per request, so it can't encode/stitch an MP4 on its own. What it hands
+  you (images + narration audio, auto-uploaded to R2) still needs one
+  manual assembly pass in a video editor, or a future integration with a
+  render-as-a-service API (Shotstack/Creatomate) if you want that
+  automated too — see the comment at the top of `video/fallback.ts`.
+- **`MEDIA_PUBLIC_BASE_URL` is unset by default** — fallback asset URLs will
+  read as `r2-key:...` placeholders until you enable public access (or a
+  custom domain) on the `gas-media` R2 bucket and set that var to it.
