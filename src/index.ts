@@ -405,6 +405,47 @@ export default {
       return json({ open, overdue, done, total: (data ?? []).length });
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // Content review routes — lets LITE actually surface what's sitting in
+    // content_queue for review, and lets the user approve/reject/edit it.
+    // insertDrafts() already writes everything as pending_approval and
+    // nothing else in this codebase ever auto-publishes — these routes are
+    // the missing review surface, not a change to that existing gate.
+    // ═══════════════════════════════════════════════════════════════════
+
+    // GET /content?status=pending_approval&job_id=<filter>&id=<exact>
+    if (url.pathname === "/content" && req.method === "GET") {
+      const id = url.searchParams.get("id");
+      const jobId = url.searchParams.get("job_id");
+      const status = url.searchParams.get("status") ?? "pending_approval";
+      let query = db.from("content_queue").select("*");
+      if (id) query = query.eq("id", id);
+      if (jobId) query = query.eq("job_id", jobId);
+      if (status !== "all") query = query.eq("status", status);
+      const { data, error } = await query.order("created_at", { ascending: false }).limit(50);
+      if (error) return json({ error: error.message }, 400);
+      return json({ content: data });
+    }
+
+    // POST /content — approve/reject/edit a draft. `id` is required; only
+    // the fields actually sent get changed, so an approval that doesn't
+    // touch body/title leaves the content exactly as generated.
+    if (url.pathname === "/content" && req.method === "POST") {
+      const body = (await req.json()) as Record<string, unknown>;
+      const { id, ...fields } = body;
+      if (!id) return json({ error: "id is required" }, 400);
+      if (fields.status) {
+        const allowed = ["pending_approval", "approved", "rejected", "posted"];
+        if (!allowed.includes(fields.status as string)) {
+          return json({ error: `status must be one of: ${allowed.join(", ")}` }, 400);
+        }
+      }
+      const row = { ...fields, reviewed_at: new Date().toISOString() };
+      const { data, error } = await db.from("content_queue").update(row).eq("id", id).select().single();
+      if (error) return json({ error: error.message }, 400);
+      return json({ content: data });
+    }
+
     return json({ error: "not found" }, 404);
     } catch (e: any) {
       return json({ error: "internal error", detail: String(e?.message ?? e) }, 500);
