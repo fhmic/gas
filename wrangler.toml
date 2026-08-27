@@ -49,6 +49,6 @@ bucket_name = "gas-media"
 # Plain vars (safe to keep here):
 [vars]
 GOOGLE_GEMINI_MODEL = "gemini-3.6-flash"
-RUNWAY_MODEL = "gen4_turbo"
+RUNWAY_MODEL = "gen4.5"
 RUNWAY_API_VERSION = "2024-11-06"
-# MEDIA_PUBLIC_BASE_URL = "https://media.yourdomain.com"   # uncomment once your R2 bucket has a public URL
+MEDIA_PUBLIC_BASE_URL = "https://pub-425b2a7aedbf4fbfac1fb08c2dd0b306.r2.dev"
