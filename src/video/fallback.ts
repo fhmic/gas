@@ -94,24 +94,28 @@ export async function renderFallbackSlideshow(
   draftIdHint: string,
 ): Promise<VideoRenderResult> {
   const images: string[] = [];
+  const imageKeys: string[] = [];
   const captions: string[] = [];
   const failures: string[] = [];
 
   for (let i = 0; i < scenes.length; i++) {
     const scene = scenes[i];
     captions.push(scene.narration);
+    const key = `gas/${draftIdHint}/scene-${i}.png`;
     try {
-      const url = await generateSceneImage(env, scene.visual_prompt, `gas/${draftIdHint}/scene-${i}.png`);
+      const url = await generateSceneImage(env, scene.visual_prompt, key);
       images.push(url);
+      imageKeys.push(key);
     } catch (err) {
       failures.push(`scene ${i} image: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
   let audioUrl = "";
+  const audioKey = `gas/${draftIdHint}/narration.wav`;
   try {
     const fullNarration = scenes.map((s) => s.narration).join(" ");
-    audioUrl = await generateNarrationAudio(env, fullNarration, `gas/${draftIdHint}/narration.wav`);
+    audioUrl = await generateNarrationAudio(env, fullNarration, audioKey);
   } catch (err) {
     failures.push(`narration audio: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -127,7 +131,7 @@ export async function renderFallbackSlideshow(
   return {
     status: "fallback_ready",
     provider: "fallback_slideshow",
-    assets: { images, audio_url: audioUrl, captions },
+    assets: { images, image_keys: imageKeys, audio_url: audioUrl, audio_key: audioUrl ? audioKey : "", captions },
     error: failures.length > 0 ? `Partial success — ${failures.join(" | ")}` : undefined,
   };
 }

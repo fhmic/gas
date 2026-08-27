@@ -27,7 +27,7 @@ const MAX_SCENES = 4;
  * on sentence boundaries rather than a strict parser — good enough for
  * "how many distinct visual beats does this script imply", which is all
  * either video provider needs. */
-export function parseScenes(scriptBody: string, niche: string): VideoScene[] {
+export function parseScenes(scriptBody: string, brief: string): VideoScene[] {
   const sentences = scriptBody
     .replace(/\n+/g, " ")
     .split(/(?<=[.!?])\s+/)
@@ -41,7 +41,7 @@ export function parseScenes(scriptBody: string, niche: string): VideoScene[] {
     scenes.push({ narration, visual_prompt: narration });
   }
   if (scenes.length === 0) {
-    scenes.push({ narration: scriptBody.slice(0, 200), visual_prompt: `A social media video about ${niche}` });
+    scenes.push({ narration: scriptBody.slice(0, 200), visual_prompt: `A social media video about ${brief}` });
   }
   return scenes;
 }
@@ -54,13 +54,13 @@ export function parseScenes(scriptBody: string, niche: string): VideoScene[] {
 export async function startVideoRender(
   env: Env,
   scriptBody: string,
-  niche: string,
+  brief: string,
   draftIdHint: string,
 ): Promise<VideoRenderResult> {
-  const scenes = parseScenes(scriptBody, niche);
+  const scenes = parseScenes(scriptBody, brief);
 
   if (env.RUNWAY_API_KEY) {
-    const submitted = await submitVideoTask(env, scenes, niche);
+    const submitted = await submitVideoTask(env, scenes, brief);
     if (submitted.ok && submitted.taskId) {
       return { status: "queued", provider: "runway", video_task_id: submitted.taskId };
     }
@@ -84,7 +84,7 @@ export async function checkVideoRender(
   env: Env,
   taskId: string,
   scriptBody: string,
-  niche: string,
+  brief: string,
   draftIdHint: string,
 ): Promise<VideoRenderResult | null> {
   const poll = await pollVideoTask(env, taskId);
@@ -98,7 +98,7 @@ export async function checkVideoRender(
 
   // FAILED — degrade to the fallback rather than leaving the draft stuck
   // in "rendering" forever.
-  const scenes = parseScenes(scriptBody, niche);
+  const scenes = parseScenes(scriptBody, brief);
   const fallback = await renderFallbackSlideshow(env, scenes, draftIdHint);
   fallback.error = `Runway render failed (${poll.error}); used fallback instead.`;
   return fallback;

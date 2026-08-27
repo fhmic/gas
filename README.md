@@ -174,7 +174,30 @@ You can also hit `/run-now` directly (with the same Bearer auth) any time
 you want to force a fresh cycle instead of waiting for the next cron tick —
 handy for testing right after deploy.
 
-## Known limits, stated plainly
+## 8. Deleting drafts, downloading drafts, and one-off ad generation
+
+Three more things you can do beyond the standing 6h auto-generator:
+
+- **Delete a draft permanently**: `DELETE /queue/:id`. Unlike REJECT (which
+  just flips `status` and keeps the row), this actually removes it from
+  the database — and cleans up any R2 files it owned first (fallback
+  slideshow images/audio), so nothing orphaned is left in the bucket. In
+  LITE's HUD, the DELETE button on a card requires a second click within
+  4 seconds to actually fire, since there's no undo.
+- **Download a draft to your computer**: `GET /queue/:id` returns the full
+  row (title/body/platform/content_type + `video_url`/`video_assets` if
+  it's a video piece). LITE's DOWNLOAD button opens a folder picker, then
+  saves the text as a `.txt` plus (if present) the rendered MP4, the
+  fallback slideshow's images/narration audio, and a captions file.
+- **On-demand ad generation**: `POST /generate` with
+  `{"description": "...", "platforms": [...], "count": 3, "content_type": "video"}`
+  — generates content for that exact one-off idea right now, independent
+  of any standing job or its 6h cadence. Say something like "generate an
+  ad for our new budgeting app launch, aimed at Gen Z, on TikTok and
+  LinkedIn" and LITE calls this via the new `generate_ads` action, then
+  pulls the results straight into the review queue.
+
+
 
 - **Posting is manual by design** (per your choice) — the agent drafts,
   you post. Auto-posting would need each platform's business API + app

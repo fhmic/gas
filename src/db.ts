@@ -19,10 +19,15 @@ export async function getActiveJobs(db: SupabaseClient): Promise<GrowthJob[]> {
 
 /** draftVideo carries the initial render state for any draft whose
  * content_type triggered a video render (see agent.ts) — undefined for
- * plain text drafts, which keep media_type = "text" (the column default). */
+ * plain text drafts, which keep media_type = "text" (the column default).
+ * sourceBrief is stored directly on every row (job niche, or the free-text
+ * description for an ad-hoc /generate call) so later video-render polling
+ * doesn't need to join back through growth_jobs — works identically for
+ * job-based and ad-hoc drafts. */
 export async function insertDrafts(
   db: SupabaseClient,
-  jobId: string,
+  jobId: string | null,
+  sourceBrief: string,
   drafts: ContentDraft[],
   draftVideo?: Map<number, VideoRenderResult>,
 ): Promise<number> {
@@ -31,6 +36,7 @@ export async function insertDrafts(
     const video = draftVideo?.get(i);
     return {
       job_id: jobId,
+      source_brief: sourceBrief,
       platform: d.platform,
       content_type: d.content_type,
       title: d.title,
@@ -123,16 +129,17 @@ export interface PendingVideoDraft {
   id: string;
   body: string;
   video_task_id: string;
-  niche: string; // pulled from the parent growth_jobs row
+  source_brief: string;
 }
 
-/** Every draft still waiting on a Runway task, joined against its parent
- * job for the niche (Runway needs it again to build the fallback prompt if
- * the task turns out to have failed — see video/index.ts::checkVideoRender). */
+/** Every draft still waiting on a Runway task. Reads source_brief directly
+ * off content_queue — no growth_jobs join needed, which also means this
+ * works identically for ad-hoc (/generate) drafts that have no job_id at
+ * all. */
 export async function getPendingVideoRenders(db: SupabaseClient): Promise<PendingVideoDraft[]> {
   const { data, error } = await db
     .from("content_queue")
-    .select("id, body, video_task_id, growth_jobs(niche)")
+    .select("id, body, video_task_id, source_brief")
     .in("video_status", ["queued", "rendering"])
     .not("video_task_id", "is", null);
   if (error) throw new Error(`getPendingVideoRenders: ${error.message}`);
@@ -140,7 +147,7 @@ export async function getPendingVideoRenders(db: SupabaseClient): Promise<Pendin
     id: row.id,
     body: row.body,
     video_task_id: row.video_task_id,
-    niche: row.growth_jobs?.niche ?? "",
+    source_brief: row.source_brief ?? "",
   }));
 }
 
@@ -161,4 +168,22 @@ export async function updateDraftVideo(
     })
     .eq("id", draftId);
   if (error) throw new Error(`updateDraftVideo: ${error.message}`);
+}
+
+/** Single draft by id — backs both GET /queue/:id (used by LITE's download
+ * handler, which needs the full row including video_url/video_assets) and
+ * deleteDraftRow below (needs the row's R2 keys before it can be dropped). */
+export async function getDraftById(db: SupabaseClient, id: string): Promise<Record<string, unknown> | null> {
+  const { data, error } = await db.from("content_queue").select("*").eq("id", id).maybeSingle();
+  if (error) throw new Error(`getDraftById: ${error.message}`);
+  return data ?? null;
+}
+
+/** Permanently removes a draft row. Does NOT touch R2 — index.ts's DELETE
+ * route deletes the referenced R2 objects (video_assets.image_keys/
+ * audio_key) itself, before calling this, since that needs the Env
+ * binding this db-only module doesn't have. */
+export async function deleteDraftRow(db: SupabaseClient, id: string): Promise<void> {
+  const { error } = await db.from("content_queue").delete().eq("id", id);
+  if (error) throw new Error(`deleteDraftRow: ${error.message}`);
 }

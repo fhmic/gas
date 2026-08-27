@@ -112,8 +112,10 @@ export interface VideoRenderResult {
   video_url?: string;     // set once status === "ready" (Runway MP4)
   video_task_id?: string; // set while status === "queued" | "rendering" (Runway poll handle)
   assets?: {               // set once status === "fallback_ready"
-    images: string[];      // R2 URLs, one per scene
-    audio_url: string;     // R2 URL, full narration track (Workers AI TTS)
+    images: string[];      // R2 public URLs (or r2-key: placeholders), one per scene
+    image_keys: string[];  // raw R2 object keys, same order as images — used for delete cleanup
+    audio_url: string;     // R2 public URL, full narration track (Workers AI TTS)
+    audio_key: string;     // raw R2 object key for the audio
     captions: string[];    // per-scene caption text, same order as images
   };
   error?: string;
