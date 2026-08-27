@@ -46,6 +46,19 @@ function buildScheduledTask(job: GrowthJob): string {
   );
 }
 
+/** Used when a job sets posts_per_platform: one call per platform, asking
+ * for exactly that many pieces for THAT platform only — guarantees the
+ * split (e.g. exactly 1 LinkedIn + 1 TikTok + ... per day) instead of
+ * leaving it to the model's own judgment across a combined platform list,
+ * which could easily put 2 pieces on one platform and 0 on another. */
+function buildPerPlatformTask(job: GrowthJob, platform: string, count: number): string {
+  return (
+    `Generate exactly ${count} piece(s) of content for the '${job.niche}' ` +
+    `affiliate niche, for THIS platform only: ${platform}. Goal: ${job.goal}. ` +
+    PIECE_FORMAT_INSTRUCTIONS
+  );
+}
+
 /** Ad-hoc task: unlike the scheduled pass (which works from a standing
  * niche + goal), this takes the user's exact one-off brief verbatim — e.g.
  * "a 20%-off launch ad for our new budgeting app aimed at Gen Z" — and
@@ -162,10 +175,36 @@ async function generateAndStore(
   }
 }
 
-/** Runs one scheduled content-generation pass for a job (cron-driven).
+/** Runs one scheduled content-generation pass for a job (cron-driven, only
+ * called for jobs getActiveJobs has already confirmed are actually due).
  * Never throws — failures are logged to run_log and returned instead, so
- * one bad job doesn't stop the cron cycle from processing the rest. */
+ * one bad job doesn't stop the cron cycle from processing the rest.
+ *
+ * Two modes:
+ * - posts_per_platform set: one generation call PER platform, each asking
+ *   for exactly that many pieces — e.g. posts_per_platform: 1 with 5
+ *   platforms guarantees exactly 5 pieces total, one per platform, not
+ *   left to the model's own split.
+ * - posts_per_platform unset (legacy): one combined call asking for
+ *   posts_per_run pieces across all platforms together, same as before. */
 export async function runContentPass(db: SupabaseClient, env: Env, job: GrowthJob): Promise<GenerationResult> {
+  if (job.posts_per_platform && job.posts_per_platform > 0) {
+    let totalCreated = 0;
+    const errors: string[] = [];
+    for (const platform of job.platforms) {
+      const result = await generateAndStore(db, env, {
+        jobId: job.id,
+        sourceBrief: job.niche,
+        task: buildPerPlatformTask(job, platform, job.posts_per_platform),
+        requestedCount: job.posts_per_platform,
+        logAction: "content_pass",
+      });
+      totalCreated += result.draftsCreated;
+      if (!result.ok && result.error) errors.push(`${platform}: ${result.error}`);
+    }
+    return { ok: errors.length === 0, draftsCreated: totalCreated, error: errors.length > 0 ? errors.join(" | ") : undefined };
+  }
+
   return generateAndStore(db, env, {
     jobId: job.id,
     sourceBrief: job.niche,

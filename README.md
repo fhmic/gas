@@ -231,3 +231,37 @@ Three more things you can do beyond the standing 6h auto-generator:
 - **`MEDIA_PUBLIC_BASE_URL` is unset by default** — fallback asset URLs will
   read as `r2-key:...` placeholders until you enable public access (or a
   custom domain) on the `gas-media` R2 bucket and set that var to it.
+
+## 9. Exact daily volume — e.g. "1 per platform, 5 platforms, once a day"
+
+Two settings on a job control this precisely now:
+
+- **`posts_per_platform`**: when set, generates exactly that many pieces
+  for EACH platform in the job — one LLM call per platform, so the split
+  is guaranteed, not left to the model's own judgment across a combined
+  list (which could put 2 pieces on TikTok and 0 on LinkedIn in one pass).
+  Leave it unset to keep the old behavior (`posts_per_run` total, model
+  decides the split).
+- **`cadence_hours`**: now actually enforced (it wasn't before — see the
+  note in `migrations/004_scheduling.sql`). A job only gets a fresh
+  content pass once `cadence_hours` has really elapsed since its last run,
+  no matter how often the Worker's own cron trigger ticks.
+
+For "exactly 1 LinkedIn + 1 TikTok + 1 Instagram + 1 Twitter + 1 Facebook
+= 5/day, once a day":
+
+```powershell
+$body = '{"niche":"forex trading apps","platforms":["LinkedIn","TikTok","Instagram","Twitter","Facebook"],"posts_per_platform":1,"cadence_hours":24}'
+Invoke-RestMethod -Method Post -Uri "https://gas.elites.workers.dev/jobs" -Headers $headers -Body $body
+```
+
+To change an existing job instead of creating a new one:
+```powershell
+Invoke-RestMethod -Method Patch -Uri "https://gas.elites.workers.dev/jobs/<job-id>" -Headers $headers `
+  -Body '{"posts_per_platform":1,"cadence_hours":24}'
+```
+
+This also directly reduces Workers AI quota pressure — 5 pieces/day is at
+most 5 fallback renders (fewer still if Runway succeeds for some), versus
+whatever a `posts_per_run`-based combined pass repeated every cron tick
+could add up to before cadence_hours was enforced.

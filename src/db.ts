@@ -8,13 +8,36 @@ export function getDb(env: Env): SupabaseClient {
   });
 }
 
+/** Jobs that are both active AND actually due for a content pass — i.e.
+ * cadence_hours has really elapsed since last_run_at. The Worker's global
+ * cron (wrangler.toml) can tick more often than any individual job's
+ * cadence (e.g. cron every 6h, a job set to cadence_hours: 24) — this is
+ * what makes that per-job cadence real instead of decorative. Filtered in
+ * application code rather than a raw SQL interval comparison, since
+ * that's simpler to read/adjust than pushing date math through
+ * PostgREST's query builder. */
 export async function getActiveJobs(db: SupabaseClient): Promise<GrowthJob[]> {
   const { data, error } = await db
     .from("growth_jobs")
     .select("*")
     .eq("status", "active");
   if (error) throw new Error(`getActiveJobs: ${error.message}`);
-  return data as GrowthJob[];
+  const jobs = data as GrowthJob[];
+  const now = Date.now();
+  return jobs.filter((job) => {
+    if (!job.last_run_at) return true; // never run — always due
+    const dueAt = new Date(job.last_run_at).getTime() + job.cadence_hours * 3600_000;
+    return now >= dueAt;
+  });
+}
+
+/** Stamps a job as just having run, whether the pass succeeded or failed —
+ * a failing job (bad config, model outage) shouldn't get retried on every
+ * cron tick either, since that's exactly the kind of repeated-call burst
+ * that eats the Workers AI daily quota. */
+export async function markJobRun(db: SupabaseClient, jobId: string): Promise<void> {
+  const { error } = await db.from("growth_jobs").update({ last_run_at: new Date().toISOString() }).eq("id", jobId);
+  if (error) throw new Error(`markJobRun: ${error.message}`);
 }
 
 /** draftVideo carries the initial render state for any draft whose

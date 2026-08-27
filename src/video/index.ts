@@ -68,7 +68,9 @@ export async function startVideoRender(
     // limit, model outage) — fall through to the free path rather than
     // leaving this draft with no media at all.
     const fallback = await renderFallbackSlideshow(env, scenes, draftIdHint);
-    fallback.error = `Runway submit failed (${submitted.error}); used fallback instead.`;
+    fallback.error = [`Runway submit failed (${submitted.error}); used fallback instead.`, fallback.error]
+      .filter(Boolean)
+      .join(" | ");
     return fallback;
   }
 
@@ -100,6 +102,8 @@ export async function checkVideoRender(
   // in "rendering" forever.
   const scenes = parseScenes(scriptBody, brief);
   const fallback = await renderFallbackSlideshow(env, scenes, draftIdHint);
-  fallback.error = `Runway render failed (${poll.error}); used fallback instead.`;
+  fallback.error = [`Runway render failed (${poll.error}); used fallback instead.`, fallback.error]
+    .filter(Boolean)
+    .join(" | ");
   return fallback;
 }

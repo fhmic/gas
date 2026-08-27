@@ -56,6 +56,8 @@ export interface GrowthJob {
   networks: string[];
   cadence_hours: number;
   posts_per_run: number;
+  posts_per_platform?: number | null; // when set, overrides posts_per_run — exactly this many pieces per platform, guaranteed (not left to the LLM's split)
+  last_run_at?: string | null;        // last time this job's cadence was honored — see getActiveJobs in db.ts
   status: "active" | "paused";
   created_at: string;
   updated_at: string;

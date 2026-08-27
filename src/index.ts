@@ -1,6 +1,6 @@
 // gas/src/index.ts
 import type { Env } from "./types";
-import { getDb, getActiveJobs, insertSnapshot, logRun, getPendingVideoRenders, updateDraftVideo, getDraftById, deleteDraftRow } from "./db";
+import { getDb, getActiveJobs, insertSnapshot, logRun, getPendingVideoRenders, updateDraftVideo, getDraftById, deleteDraftRow, markJobRun } from "./db";
 import { runContentPass, runAdHocGeneration } from "./agent";
 import { checkVideoRender } from "./video";
 import { pollPartnerStack } from "./networks/partnerstack";
@@ -73,10 +73,14 @@ async function runCycle(env: Env): Promise<{ jobsRun: number; reportId: string |
   const db = getDb(env);
   const cycleStart = new Date().toISOString();
 
-  // 1. Content pass for every active job.
+  // 1. Content pass for every job that's active AND actually due per its
+  // own cadence_hours — getActiveJobs filters that now, so a job set to
+  // cadence_hours: 24 really does run once a day even though this cron
+  // trigger itself fires more often (see wrangler.toml's schedule).
   const jobs = await getActiveJobs(db);
   for (const job of jobs) {
     await runContentPass(db, env, job);
+    await markJobRun(db, job.id); // stamped regardless of success/failure — see markJobRun's own comment
   }
 
   // 1b. Check on any video renders still in flight from a previous pass.
@@ -161,6 +165,7 @@ export default {
           networks: body.networks ?? ["partnerstack", "exness"],
           cadence_hours: body.cadence_hours ?? 6,
           posts_per_run: body.posts_per_run ?? 3,
+          posts_per_platform: body.posts_per_platform ?? null,
         })
         .select()
         .single();
