@@ -70,7 +70,16 @@ function publicUrl(env: Env, key: string): string {
 
 async function generateSceneImage(env: Env, prompt: string, key: string): Promise<string> {
   const result = await env.AI.run(IMAGE_MODEL, {
-    prompt: `${prompt}. Vertical composition, bold and eye-catching, suitable for a social media video frame.`,
+    // Scene captions are already tracked separately (VideoRenderResult.assets.captions,
+    // one per scene) and overlaid at the video-editing step — the image itself was never
+    // meant to carry any words. Without an explicit "no text" instruction, feeding raw
+    // narration prose (e.g. "...tax season...") straight in as the prompt reads to the
+    // model as a request to render that word on-screen, and flux-1-schnell (the fast,
+    // distilled variant used here for low latency) is known to misspell rendered text
+    // badly — "tax" -> "tox" and similar. Suppressing on-screen text entirely, rather
+    // than trying to get the spelling right, is the fix: it also matches the prompt
+    // Runway gets in runway.ts ("...no on-screen text.").
+    prompt: `${prompt}. Vertical composition, bold and eye-catching, suitable for a social media video frame. No text, no words, no letters, no captions, no typography, no writing of any kind — image only.`,
   });
   const bytes = await toBytes(result);
   await env.MEDIA_BUCKET.put(key, bytes, { httpMetadata: { contentType: "image/png" } });
