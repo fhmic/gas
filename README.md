@@ -265,3 +265,44 @@ This also directly reduces Workers AI quota pressure — 5 pieces/day is at
 most 5 fallback renders (fewer still if Runway succeeds for some), versus
 whatever a `posts_per_run`-based combined pass repeated every cron tick
 could add up to before cadence_hours was enforced.
+
+## 10. Batch rotation: affiliate → job opportunity → educational
+
+A job no longer produces the same kind of content every pass. Each job cycles
+through its `rotation` list, one batch type per pass (default order):
+
+1. **affiliate**: product/offer promotion (the original behaviour).
+2. **job_opportunity**: CFO / Finance Manager / Financial Controller roles.
+   The focus role changes each cycle. If you supply real openings in the job's
+   `job_leads` field, only those are used. If not, the agent writes a
+   role-spotlight post and leaves `[NEEDS INPUT: employer / location / apply link]`
+   placeholders. It has no way to look up live vacancies and is told never to
+   invent employers, salaries or links.
+3. **educational**: pure teaching content on finance, accounting, Nigerian tax
+   regulation, capital markets, treasury and investment. No selling. A topic
+   list rotates so consecutive educational batches differ. Rates, thresholds
+   and dates the model cannot be sure are current are flagged `[VERIFY: ...]`
+   for you to confirm before posting.
+
+Then it starts again at affiliate. The position is stored in
+`growth_jobs.rotation_index` and only advances when a pass actually created
+drafts, so a failed pass retries the same batch type. Every draft records its
+type in `content_queue.content_category`.
+
+Run `migrations/005_rotation.sql` once. Existing jobs pick up the default
+rotation and start at affiliate.
+
+```powershell
+# New job with the default 3-step rotation
+$body = '{"niche":"forex trading apps","platforms":["LinkedIn"],"posts_per_platform":1,"cadence_hours":24}'
+
+# Supply real openings for the job-opportunity batches
+Invoke-RestMethod -Method Patch -Uri "https://gas.elites.workers.dev/jobs/<job-id>" -Headers $headers `
+  -Body '{"job_leads":"Financial Controller, <employer>, Lagos, apply: <link>, closes <date>"}'
+
+# Custom order or subset, e.g. alternate educational and affiliate only
+Invoke-RestMethod -Method Patch -Uri "https://gas.elites.workers.dev/jobs/<job-id>" -Headers $headers `
+  -Body '{"rotation":["educational","affiliate"],"rotation_index":0}'
+```
+
+Posting stays manual: everything still lands in `pending_approval`.

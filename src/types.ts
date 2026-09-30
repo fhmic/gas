@@ -58,10 +58,19 @@ export interface GrowthJob {
   posts_per_run: number;
   posts_per_platform?: number | null; // when set, overrides posts_per_run — exactly this many pieces per platform, guaranteed (not left to the LLM's split)
   last_run_at?: string | null;        // last time this job's cadence was honored — see getActiveJobs in db.ts
+  rotation?: ContentCategory[] | null; // batch types this job cycles through, in order — see migrations/005_rotation.sql
+  rotation_index?: number | null;      // completed passes so far; next pass uses rotation[rotation_index % rotation.length]
+  job_leads?: string | null;           // optional real openings to promote in job_opportunity batches
   status: "active" | "paused";
   created_at: string;
   updated_at: string;
 }
+
+/** What a batch of content is FOR. A job cycles through these in order. */
+export type ContentCategory = "affiliate" | "job_opportunity" | "educational";
+
+export const CONTENT_CATEGORIES: readonly ContentCategory[] = ["affiliate", "job_opportunity", "educational"];
+export const DEFAULT_ROTATION: readonly ContentCategory[] = CONTENT_CATEGORIES;
 
 export interface LiteExecutiveSummary {
   opportunity: string;

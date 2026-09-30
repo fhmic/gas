@@ -1,8 +1,9 @@
 // gas/src/agent.ts
-import type { Env, GrowthJob, ContentDraft, VideoRenderResult } from "./types";
+import type { Env, GrowthJob, ContentDraft, VideoRenderResult, ContentCategory } from "./types";
+import { pickCategory, buildCategoryBrief } from "./categories";
 import { SYSTEM_PROMPT } from "./systemPrompt";
 import { generateWithSummary } from "./llm";
-import { insertDrafts, logRun } from "./db";
+import { insertDrafts, logRun, advanceRotation } from "./db";
 import { startVideoRender } from "./video";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -37,26 +38,29 @@ const PIECE_FORMAT_INSTRUCTIONS = [
   "After all pieces, still include the mandatory LITE EXECUTIVE SUMMARY block.",
 ].join("\n");
 
-function buildScheduledTask(job: GrowthJob): string {
-  return (
-    `Generate ${job.posts_per_run} pieces of content for the '${job.niche}' ` +
-    `affiliate niche. Goal: ${job.goal}. ` +
-    `Target platforms: ${job.platforms.join(", ")}. ` +
-    PIECE_FORMAT_INSTRUCTIONS
-  );
+function buildScheduledTask(job: GrowthJob, category: ContentCategory, cycle: number): string {
+  const countLine = `Generate ${job.posts_per_run} pieces`;
+  const platformLine = `Target platforms: ${job.platforms.join(", ")}. `;
+  return buildCategoryBrief(category, job, cycle, countLine, platformLine).task + "\n\n" + PIECE_FORMAT_INSTRUCTIONS;
 }
 
 /** Used when a job sets posts_per_platform: one call per platform, asking
  * for exactly that many pieces for THAT platform only — guarantees the
  * split (e.g. exactly 1 LinkedIn + 1 TikTok + ... per day) instead of
  * leaving it to the model's own judgment across a combined platform list,
- * which could easily put 2 pieces on one platform and 0 on another. */
-function buildPerPlatformTask(job: GrowthJob, platform: string, count: number): string {
-  return (
-    `Generate exactly ${count} piece(s) of content for the '${job.niche}' ` +
-    `affiliate niche, for THIS platform only: ${platform}. Goal: ${job.goal}. ` +
-    PIECE_FORMAT_INSTRUCTIONS
-  );
+ * which could easily put 2 pieces on one platform and 0 on another. The
+ * batch type (affiliate / job_opportunity / educational) is the same for
+ * every platform within one pass. */
+function buildPerPlatformTask(
+  job: GrowthJob,
+  platform: string,
+  count: number,
+  category: ContentCategory,
+  cycle: number,
+): string {
+  const countLine = `Generate exactly ${count} piece(s)`;
+  const platformLine = `Write for THIS platform only: ${platform}. `;
+  return buildCategoryBrief(category, job, cycle, countLine, platformLine).task + "\n\n" + PIECE_FORMAT_INSTRUCTIONS;
 }
 
 /** Ad-hoc task: unlike the scheduled pass (which works from a standing
@@ -121,7 +125,14 @@ interface GenerationResult {
 async function generateAndStore(
   db: SupabaseClient,
   env: Env,
-  params: { jobId: string | null; sourceBrief: string; task: string; requestedCount: number; logAction: string },
+  params: {
+    jobId: string | null;
+    sourceBrief: string;
+    task: string;
+    requestedCount: number;
+    logAction: string;
+    category?: ContentCategory;
+  },
 ): Promise<GenerationResult> {
   try {
     // ~1200 tokens/piece is generous for a post/ad/script, plus headroom
@@ -147,7 +158,7 @@ async function generateAndStore(
       videoResults.set(i, result);
     }
 
-    const created = await insertDrafts(db, params.jobId, params.sourceBrief, drafts, videoResults);
+    const created = await insertDrafts(db, params.jobId, params.sourceBrief, drafts, videoResults, params.category ?? "affiliate");
 
     const shortfall = params.requestedCount - created;
     const videoFailures = [...videoResults.values()].filter((v) => v.status === "failed").length;
@@ -160,7 +171,7 @@ async function generateAndStore(
 
     await logRun(db, {
       jobId: params.jobId,
-      action: params.logAction,
+      action: params.category ? `${params.logAction}:${params.category}` : params.logAction,
       ok: true,
       draftsCreated: created,
       summary,
@@ -187,31 +198,45 @@ async function generateAndStore(
  *   left to the model's own split.
  * - posts_per_platform unset (legacy): one combined call asking for
  *   posts_per_run pieces across all platforms together, same as before. */
-export async function runContentPass(db: SupabaseClient, env: Env, job: GrowthJob): Promise<GenerationResult> {
+export async function runContentPass(db: SupabaseClient, env: Env, job: GrowthJob): Promise<GenerationResult & { category: ContentCategory }> {
+  // Decide this pass's batch type from the job's stored rotation position.
+  const { category, cycle, nextIndex } = pickCategory(job);
+
+  let result: GenerationResult;
   if (job.posts_per_platform && job.posts_per_platform > 0) {
     let totalCreated = 0;
     const errors: string[] = [];
     for (const platform of job.platforms) {
-      const result = await generateAndStore(db, env, {
+      const r = await generateAndStore(db, env, {
         jobId: job.id,
-        sourceBrief: job.niche,
-        task: buildPerPlatformTask(job, platform, job.posts_per_platform),
+        sourceBrief: category === "affiliate" ? job.niche : `${job.niche} [${category}]`,
+        task: buildPerPlatformTask(job, platform, job.posts_per_platform, category, cycle),
         requestedCount: job.posts_per_platform,
         logAction: "content_pass",
+        category,
       });
-      totalCreated += result.draftsCreated;
-      if (!result.ok && result.error) errors.push(`${platform}: ${result.error}`);
+      totalCreated += r.draftsCreated;
+      if (!r.ok && r.error) errors.push(`${platform}: ${r.error}`);
     }
-    return { ok: errors.length === 0, draftsCreated: totalCreated, error: errors.length > 0 ? errors.join(" | ") : undefined };
+    result = { ok: errors.length === 0, draftsCreated: totalCreated, error: errors.length > 0 ? errors.join(" | ") : undefined };
+  } else {
+    result = await generateAndStore(db, env, {
+      jobId: job.id,
+      sourceBrief: category === "affiliate" ? job.niche : `${job.niche} [${category}]`,
+      task: buildScheduledTask(job, category, cycle),
+      requestedCount: job.posts_per_run,
+      logAction: "content_pass",
+      category,
+    });
   }
 
-  return generateAndStore(db, env, {
-    jobId: job.id,
-    sourceBrief: job.niche,
-    task: buildScheduledTask(job),
-    requestedCount: job.posts_per_run,
-    logAction: "content_pass",
-  });
+  // Move to the next batch type only if this one actually produced drafts;
+  // a failed pass retries the SAME type next time instead of silently
+  // skipping it (e.g. a model outage shouldn't cost you the job-post batch).
+  if (result.draftsCreated > 0) {
+    await advanceRotation(db, job.id, nextIndex);
+  }
+  return { ...result, category };
 }
 
 /** Runs a one-off, on-demand content pass from a free-text idea/brief —

@@ -166,6 +166,10 @@ export default {
           cadence_hours: body.cadence_hours ?? 6,
           posts_per_run: body.posts_per_run ?? 3,
           posts_per_platform: body.posts_per_platform ?? null,
+          // Batch-type rotation (see categories.ts). Omit for the default
+          // affiliate -> job_opportunity -> educational cycle.
+          ...(Array.isArray(body.rotation) ? { rotation: body.rotation } : {}),
+          job_leads: body.job_leads ?? null,
         })
         .select()
         .single();

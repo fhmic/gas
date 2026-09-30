@@ -1,6 +1,6 @@
 // gas/src/db.ts
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
-import type { Env, GrowthJob, LiteExecutiveSummary, NetworkSnapshot, ContentDraft, VideoRenderResult } from "./types";
+import type { Env, GrowthJob, LiteExecutiveSummary, NetworkSnapshot, ContentDraft, VideoRenderResult, ContentCategory } from "./types";
 
 export function getDb(env: Env): SupabaseClient {
   return createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
@@ -40,6 +40,13 @@ export async function markJobRun(db: SupabaseClient, jobId: string): Promise<voi
   if (error) throw new Error(`markJobRun: ${error.message}`);
 }
 
+/** Records that a job has completed another pass, so the next one uses the
+ * next batch type in its rotation (see categories.ts::pickCategory). */
+export async function advanceRotation(db: SupabaseClient, jobId: string, nextIndex: number): Promise<void> {
+  const { error } = await db.from("growth_jobs").update({ rotation_index: nextIndex }).eq("id", jobId);
+  if (error) throw new Error(`advanceRotation: ${error.message}`);
+}
+
 /** draftVideo carries the initial render state for any draft whose
  * content_type triggered a video render (see agent.ts) — undefined for
  * plain text drafts, which keep media_type = "text" (the column default).
@@ -53,6 +60,7 @@ export async function insertDrafts(
   sourceBrief: string,
   drafts: ContentDraft[],
   draftVideo?: Map<number, VideoRenderResult>,
+  category: ContentCategory = "affiliate",
 ): Promise<number> {
   if (drafts.length === 0) return 0;
   const rows = drafts.map((d, i) => {
@@ -62,6 +70,7 @@ export async function insertDrafts(
       source_brief: sourceBrief,
       platform: d.platform,
       content_type: d.content_type,
+      content_category: category,
       title: d.title,
       body: d.body,
       tracking_subid: d.tracking_subid ?? null,
