@@ -233,8 +233,14 @@ export async function runContentPass(db: SupabaseClient, env: Env, job: GrowthJo
   // Move to the next batch type only if this one actually produced drafts;
   // a failed pass retries the SAME type next time instead of silently
   // skipping it (e.g. a model outage shouldn't cost you the job-post batch).
+  //
+  // advanceRotation is guarded on the index this pass started at, so a pass can
+  // only advance from the position it actually read. runCycle now claims a job
+  // before this function runs, which stops two passes overlapping in the first
+  // place; this CAS is the second line of defence, and the thing that would
+  // otherwise corrupt the cycle if anything else ever writes the index.
   if (result.draftsCreated > 0) {
-    await advanceRotation(db, job.id, nextIndex);
+    await advanceRotation(db, job.id, nextIndex, job.rotation_index ?? 0);
   }
   return { ...result, category };
 }

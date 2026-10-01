@@ -1,6 +1,6 @@
 // gas/src/index.ts
 import type { Env } from "./types";
-import { getDb, getActiveJobs, insertSnapshot, logRun, getPendingVideoRenders, updateDraftVideo, getDraftById, deleteDraftRow, markJobRun } from "./db";
+import { getDb, getActiveJobs, insertSnapshot, logRun, getPendingVideoRenders, updateDraftVideo, getDraftById, deleteDraftRow, claimJobRun } from "./db";
 import { runContentPass, runAdHocGeneration } from "./agent";
 import { checkVideoRender } from "./video";
 import { pollPartnerStack } from "./networks/partnerstack";
@@ -69,7 +69,7 @@ async function checkPendingVideoRenders(env: Env): Promise<{ checked: number; re
 
 /** Full poll-and-generate cycle. Called by the cron trigger, and reachable
  * manually via POST /run-now so you can test or force a fresh pull. */
-async function runCycle(env: Env): Promise<{ jobsRun: number; reportId: string | null; videoRenders: { checked: number; resolved: number } }> {
+async function runCycle(env: Env): Promise<{ jobsRun: number; jobsSkipped: number; reportId: string | null; videoRenders: { checked: number; resolved: number } }> {
   const db = getDb(env);
   const cycleStart = new Date().toISOString();
 
@@ -78,9 +78,27 @@ async function runCycle(env: Env): Promise<{ jobsRun: number; reportId: string |
   // cadence_hours: 24 really does run once a day even though this cron
   // trigger itself fires more often (see wrangler.toml's schedule).
   const jobs = await getActiveJobs(db);
+  let jobsClaimed = 0;
+  let jobsSkipped = 0;
   for (const job of jobs) {
+    // Claim the job BEFORE doing any work. runCycle is reachable from both the
+    // cron trigger and POST /run-now, and nothing in a Worker serialises those
+    // two — without this claim, hitting /run-now while a cron tick is mid-pass
+    // would run the same job twice concurrently: two LLM calls, two sets of
+    // drafts, and one lost rotation advance. The claim is a conditional UPDATE
+    // on last_run_at, so exactly one of the two callers wins and the other is
+    // told to skip.
+    const claimed = await claimJobRun(db, job.id, job.last_run_at ?? null);
+    if (!claimed) {
+      jobsSkipped += 1;
+      console.log(`[cycle] skipping job ${job.id}: already claimed by another cycle`);
+      continue;
+    }
+    jobsClaimed += 1;
+    // The claim already stamped last_run_at, so a failure here still waits out
+    // the full cadence before retrying — deliberate, so a model outage doesn't
+    // burn the Workers AI quota on repeat attempts.
     await runContentPass(db, env, job);
-    await markJobRun(db, job.id); // stamped regardless of success/failure — see markJobRun's own comment
   }
 
   // 1b. Check on any video renders still in flight from a previous pass.
@@ -134,7 +152,7 @@ async function runCycle(env: Env): Promise<{ jobsRun: number; reportId: string |
 
   await logRun(db, { action: "report_build", ok: !insertErr, error: insertErr?.message ?? null });
 
-  return { jobsRun: jobs.length, reportId: inserted?.id ?? null, videoRenders };
+  return { jobsRun: jobsClaimed, jobsSkipped, reportId: inserted?.id ?? null, videoRenders };
 }
 
 export default {

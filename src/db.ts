@@ -31,19 +31,74 @@ export async function getActiveJobs(db: SupabaseClient): Promise<GrowthJob[]> {
   });
 }
 
-/** Stamps a job as just having run, whether the pass succeeded or failed —
- * a failing job (bad config, model outage) shouldn't get retried on every
- * cron tick either, since that's exactly the kind of repeated-call burst
- * that eats the Workers AI daily quota. */
-export async function markJobRun(db: SupabaseClient, jobId: string): Promise<void> {
-  const { error } = await db.from("growth_jobs").update({ last_run_at: new Date().toISOString() }).eq("id", jobId);
-  if (error) throw new Error(`markJobRun: ${error.message}`);
+/** Atomically claims a job for this cycle. Returns false if another cycle
+ *  already claimed it, in which case the caller must skip it entirely.
+ *
+ * runCycle is reachable from two independent entry points — the cron trigger
+ * and POST /run-now — and a Worker has no in-process state to guard with, so the
+ * claim has to be a single conditional UPDATE. Postgres serialises
+ * `UPDATE ... WHERE` on a row, so exactly one concurrent caller can match the
+ * `last_run_at` value it read; every other caller updates zero rows and is told
+ * to skip.
+ *
+ * This replaces the old stamp-after-work `markJobRun`, which had a race window
+ * as wide as the whole content pass. Two callers would both read "not yet
+ * stamped", both spend an LLM call (and possibly a video render), both insert
+ * drafts, and both write the same next rotation index — so you paid twice and
+ * the batch rotation advanced by one instead of two. Stamping BEFORE the
+ * expensive work closes that window: the job is already taken before any money
+ * is spent.
+ *
+ * `expectedLastRunAt` must be the value the caller read, i.e. job.last_run_at.
+ * Passing a freshly-read timestamp defeats the check; passing null claims only
+ * a never-run job.
+ *
+ * As with the markJobRun it replaces, the claim stands whether the pass then
+ * succeeds or fails: a broken job (bad config, model outage) must not retry on
+ * every cron tick, because that repeated-call burst is exactly what eats the
+ * Workers AI daily quota. The cost of that trade is that a transient failure
+ * waits out the full cadence_hours before retrying — see the note in runCycle. */
+export async function claimJobRun(
+  db: SupabaseClient,
+  jobId: string,
+  expectedLastRunAt: string | null,
+): Promise<boolean> {
+  const stamp = new Date().toISOString();
+  // PostgREST's .eq(column, null) never matches — a never-run job needs the
+  // `is` form. Both branches are the same atomic statement, just a different
+  // way of expressing "this row still has the value I read".
+  const pending = expectedLastRunAt
+    ? db.from("growth_jobs").update({ last_run_at: stamp })
+        .eq("id", jobId).eq("last_run_at", expectedLastRunAt).select("id")
+    : db.from("growth_jobs").update({ last_run_at: stamp })
+        .eq("id", jobId).is("last_run_at", null).select("id");
+
+  const { data, error } = await pending;
+  if (error) throw new Error(`claimJobRun: ${error.message}`);
+  return (data?.length ?? 0) > 0;
 }
 
 /** Records that a job has completed another pass, so the next one uses the
- * next batch type in its rotation (see categories.ts::pickCategory). */
-export async function advanceRotation(db: SupabaseClient, jobId: string, nextIndex: number): Promise<void> {
-  const { error } = await db.from("growth_jobs").update({ rotation_index: nextIndex }).eq("id", jobId);
+ * next batch type in its rotation (see categories.ts::pickCategory).
+ *
+ * Guarded on `expectedIndex` so a pass can only advance the rotation from the
+ * position it actually started at. Without that, two overlapping passes both
+ * read index 2 and both wrote 3 — two passes paid for, one advance recorded,
+ * and the affiliate/job/educational cycle silently drifts out of step.
+ *
+ * rotation_index is `not null default 0` (migrations/005_rotation.sql), so a
+ * plain .eq is safe here — unlike last_run_at, there is no null case. */
+export async function advanceRotation(
+  db: SupabaseClient,
+  jobId: string,
+  nextIndex: number,
+  expectedIndex: number,
+): Promise<void> {
+  const { error } = await db
+    .from("growth_jobs")
+    .update({ rotation_index: nextIndex })
+    .eq("id", jobId)
+    .eq("rotation_index", expectedIndex);
   if (error) throw new Error(`advanceRotation: ${error.message}`);
 }
 

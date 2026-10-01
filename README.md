@@ -195,6 +195,23 @@ You can also hit `/run-now` directly (with the same Bearer auth) any time
 you want to force a fresh cycle instead of waiting for the next cron tick —
 handy for testing right after deploy.
 
+`/run-now` and the cron trigger can fire at the same moment, and a Worker has
+no in-process state to serialise them with, so each job is **claimed** before
+any work starts: a conditional `UPDATE` on `growth_jobs.last_run_at` that only
+matches if the row still holds the value the caller read. Postgres serialises
+that statement, so exactly one of the two callers wins and the other skips the
+job. The response reports this as `jobsSkipped`.
+
+This matters because the alternative is expensive: without the claim, an
+overlapping `/run-now` runs the same job twice concurrently — two LLM calls,
+two sets of drafts in `content_queue`, and (since the rotation index is
+likewise a compare-and-swap) one lost batch-type advance, so the
+affiliate → job_opportunity → educational cycle drifts out of step.
+
+The claim is stamped whether the pass then succeeds or fails, so a job that is
+genuinely broken — bad config, model outage — waits out its full `cadence_hours`
+before retrying rather than re-spending tokens on every cron tick.
+
 ## 8. Deleting drafts, downloading drafts, and one-off ad generation
 
 Three more things you can do beyond the standing 6h auto-generator:
