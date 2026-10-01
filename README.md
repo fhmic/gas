@@ -108,6 +108,27 @@ an existing table; every column is `add column if not exists`).
 
 Wrangler prints your Worker URL, e.g. `https://gas.<you>.workers.dev`.
 
+### Deploys are automatic from here on
+
+`npx wrangler deploy` is only the one-time first push. After that, **Cloudflare
+Workers Builds** is connected to this repository and rebuilds and redeploys the
+Worker on every push to `main` — you will see a "Workers Builds: gas" check on
+each commit, and it is that check, not a GitHub Actions workflow, that
+represents the real deploy.
+
+This matters because there used to be a `.github/workflows/deploy.yml` here as
+well. It could never have worked — it needed `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID` repository secrets that were never set, so it failed on
+every push with a bare `npx exited 1`, while Workers Builds succeeded at the
+same time. Two deploy paths for one Worker is also a race: whichever finished
+last silently overwrote the other. The workflow has been removed; Workers Builds
+is the single path.
+
+If Workers Builds ever stops running, reconnect it in the Cloudflare dashboard
+(Workers & Pages → your Worker → Settings → Builds → Connect repository) rather
+than reintroducing a parallel workflow. Nothing in this repo needs a GitHub
+Actions secret to deploy.
+
 ## 6. Wire it into LITE
 
 Add to `config/api_keys.json`:
