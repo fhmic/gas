@@ -47,8 +47,11 @@ bucket_name = "gas-media"
 #                                gen4_turbo text-to-video is metered per second)
 #
 # Plain vars (safe to keep here):
+# ...
 [vars]
+gas_worker_url = "https://gas.elites.workers.dev/"
 GOOGLE_GEMINI_MODEL = "gemini-3.6-flash"
-RUNWAY_MODEL = "gen4.5"
-RUNWAY_API_VERSION = "2024-11-06"
 MEDIA_PUBLIC_BASE_URL = "https://pub-425b2a7aedbf4fbfac1fb08c2dd0b306.r2.dev"
+RUNWAY_API_VERSION = "2024-11-06"
+RUNWAY_MODEL = "gen4.5"
+# ...
